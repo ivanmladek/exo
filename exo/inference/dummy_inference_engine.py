@@ -1,65 +1,37 @@
 from typing import Optional, Tuple, TYPE_CHECKING
 import numpy as np
-import asyncio
-import json
 from exo.inference.inference_engine import InferenceEngine
 from exo.inference.shard import Shard
-
+from exo.inference.tokenizers import DummyTokenizer
 
 class DummyInferenceEngine(InferenceEngine):
   def __init__(self):
     self.shard = None
     self.vocab_size = 1000
+    self.hidden_size = 256
     self.eos_token_id = 0
     self.latency_mean = 0.1
     self.latency_stddev = 0.02
+    self.num_generate_dummy_tokens = 10
+    self.tokenizer = DummyTokenizer()
 
-  async def infer_prompt(self, request_id: str, shard: Shard, prompt: str, image_str: Optional[str] = None, inference_state: Optional[str] = None) -> Tuple[np.ndarray, str, bool]:
-    try:
-      await self.ensure_shard(shard)
+  async def encode(self, shard: Shard, prompt: str) -> np.ndarray:
+    return np.array(self.tokenizer.encode(prompt))
+  
+  async def sample(self, x: np.ndarray, temp: float = 0.0, top_p: float = 1.0) -> np.ndarray:
+    if x[0] > self.num_generate_dummy_tokens: return np.array([self.tokenizer.eos_token_id])
+    return x
 
-      # Generate random tokens
-      output_length = np.random.randint(1, 10)
-      output = np.random.randint(1, self.vocab_size, size=(1, output_length))
+  async def decode(self, shard: Shard, tokens: np.ndarray) -> str:
+    return self.tokenizer.decode(tokens)
 
-      # Simulate latency
-      await asyncio.sleep(max(0, np.random.normal(self.latency_mean, self.latency_stddev)))
-
-      # Randomly decide if finished
-      is_finished = np.random.random() < 0.2
-      if is_finished:
-        output = np.array([[self.eos_token_id]])
-
-      new_state = json.dumps({"dummy_state": "some_value"})
-
-      return output, new_state, is_finished
-    except Exception as e:
-      print(f"Error in DummyInferenceEngine.infer_prompt: {str(e)}")
-      return np.array([[self.eos_token_id]]), json.dumps({"error": str(e)}), True
-
-  async def infer_tensor(self, request_id: str, shard: Shard, input_data: np.ndarray, inference_state: Optional[str] = None) -> Tuple[np.ndarray, str, bool]:
+  async def infer_tensor(self, request_id: str, shard: Shard, input_data: np.ndarray, inference_state: Optional[dict] = None) -> tuple[np.ndarray, Optional[dict]]:
     await self.ensure_shard(shard)
-    state = json.loads(inference_state or "{}")
-    start_pos = state.get("start_pos", 0)
-
-    output_length = np.random.randint(1, 10)
-    output = np.random.randint(1, self.vocab_size, size=(1, output_length))
-
-    await asyncio.sleep(max(0, np.random.normal(self.latency_mean, self.latency_stddev)))
-
-    is_finished = np.random.random() < 0.2
-    if is_finished:
-      output = np.array([[self.eos_token_id]])
-
-    start_pos += input_data.shape[1] + output_length
-    new_state = json.dumps({"start_pos": start_pos})
-
-    return output, new_state, is_finished
+    return input_data + 1 if self.shard.is_last_layer() else input_data, None
 
   async def ensure_shard(self, shard: Shard):
-    if self.shard == shard:
-      return
-    # Simulate shard loading without making any API calls
-    await asyncio.sleep(0.1)  # Simulate a short delay
+    if self.shard == shard: return
     self.shard = shard
-    print(f"DummyInferenceEngine: Simulated loading of shard {shard.model_id}")
+  
+  async def load_checkpoint(self, shard: Shard, path: str):
+    await self.ensure_shard(shard)

@@ -3,6 +3,8 @@ from pydantic import BaseModel
 from exo import DEBUG
 import subprocess
 import psutil
+import asyncio
+from exo.helpers import get_mac_system_info, subprocess_pool
 
 TFLOPS = 1.00
 
@@ -52,9 +54,12 @@ CHIP_FLOPS = {
   "Apple M2 Max": DeviceFlops(fp32=13.49*TFLOPS, fp16=26.98*TFLOPS, int8=53.96*TFLOPS),
   "Apple M2 Ultra": DeviceFlops(fp32=26.98*TFLOPS, fp16=53.96*TFLOPS, int8=107.92*TFLOPS),
   "Apple M3": DeviceFlops(fp32=3.55*TFLOPS, fp16=7.10*TFLOPS, int8=14.20*TFLOPS),
-  "Apple M3 Max": DeviceFlops(fp32=14.20*TFLOPS, fp16=28.40*TFLOPS, int8=56.80*TFLOPS),
   "Apple M3 Pro": DeviceFlops(fp32=4.97*TFLOPS, fp16=9.94*TFLOPS, int8=19.88*TFLOPS),
-  "Apple M4": DeviceFlops(fp32=3.55*TFLOPS, fp16=7.10*TFLOPS, int8=14.20*TFLOPS),
+  "Apple M3 Max": DeviceFlops(fp32=14.20*TFLOPS, fp16=28.40*TFLOPS, int8=56.80*TFLOPS),
+  "Apple M3 Ultra": DeviceFlops(fp32=54.26*TFLOPS, fp16=108.52*TFLOPS, int8=217.04*TFLOPS),
+  "Apple M4": DeviceFlops(fp32=4.26*TFLOPS, fp16=8.52*TFLOPS, int8=17.04*TFLOPS),
+  "Apple M4 Pro": DeviceFlops(fp32=5.72*TFLOPS, fp16=11.44*TFLOPS, int8=22.88*TFLOPS),
+  "Apple M4 Max": DeviceFlops(fp32=18.03*TFLOPS, fp16=36.07*TFLOPS, int8=72.14*TFLOPS),
   ### A chips
   "Apple A13 Bionic": DeviceFlops(fp32=0.69*TFLOPS, fp16=1.38*TFLOPS, int8=2.76*TFLOPS),
   "Apple A14 Bionic": DeviceFlops(fp32=0.75*TFLOPS, fp16=1.50*TFLOPS, int8=3.00*TFLOPS),
@@ -94,6 +99,9 @@ CHIP_FLOPS = {
   "NVIDIA TITAN RTX": DeviceFlops(fp32=16.31*TFLOPS, fp16=32.62*TFLOPS, int8=65.24*TFLOPS),
   # GTX 10 series
   "NVIDIA GEFORCE GTX 1050 TI": DeviceFlops(fp32=2.0*TFLOPS, fp16=4.0*TFLOPS, int8=8.0*TFLOPS),
+  "NVIDIA GEFORCE GTX 1070": DeviceFlops(fp32=6.463*TFLOPS, fp16=0.101*TFLOPS, int8=25.852*TFLOPS),
+  "NVIDIA GEFORCE GTX 1080": DeviceFlops(fp32=8.873*TFLOPS, fp16=0.138*TFLOPS, int8=35.492*TFLOPS),
+  "NVIDIA GEFORCE GTX 1080 TI": DeviceFlops(fp32=11.34*TFLOPS, fp16=0.177*TFLOPS, int8=45.36*TFLOPS),
   # GTX 16 series
   "NVIDIA GeForce GTX 1660 TI": DeviceFlops(fp32=4.8*TFLOPS, fp16=9.6*TFLOPS, int8=19.2*TFLOPS),
   # QUADRO RTX Ampere series
@@ -139,11 +147,13 @@ CHIP_FLOPS.update({f"{key} LAPTOP GPU": value for key, value in CHIP_FLOPS.items
 CHIP_FLOPS.update({f"{key} Laptop GPU": value for key, value in CHIP_FLOPS.items()})
 
 
-def device_capabilities() -> DeviceCapabilities:
+async def device_capabilities() -> DeviceCapabilities:
   if psutil.MACOS:
-    return mac_device_capabilities()
+    return await mac_device_capabilities()
   elif psutil.LINUX:
-    return linux_device_capabilities()
+    return await linux_device_capabilities()
+  elif psutil.WINDOWS:
+    return await windows_device_capabilities()
   else:
     return DeviceCapabilities(
       model="Unknown Device",
@@ -153,27 +163,18 @@ def device_capabilities() -> DeviceCapabilities:
     )
 
 
-def mac_device_capabilities() -> DeviceCapabilities:
-  # Fetch the model of the Mac using system_profiler
-  model = subprocess.check_output(["system_profiler", "SPHardwareDataType"]).decode("utf-8")
-  model_line = next((line for line in model.split("\n") if "Model Name" in line), None)
-  model_id = model_line.split(": ")[1] if model_line else "Unknown Model"
-  chip_line = next((line for line in model.split("\n") if "Chip" in line), None)
-  chip_id = chip_line.split(": ")[1] if chip_line else "Unknown Chip"
-  memory_line = next((line for line in model.split("\n") if "Memory" in line), None)
-  memory_str = memory_line.split(": ")[1] if memory_line else "Unknown Memory"
-  memory_units = memory_str.split()
-  memory_value = int(memory_units[0])
-  if memory_units[1] == "GB":
-    memory = memory_value*1024
-  else:
-    memory = memory_value
-
-  # Assuming static values for other attributes for demonstration
-  return DeviceCapabilities(model=model_id, chip=chip_id, memory=memory, flops=CHIP_FLOPS.get(chip_id, DeviceFlops(fp32=0, fp16=0, int8=0)))
+async def mac_device_capabilities() -> DeviceCapabilities:
+  model_id, chip_id, memory = await get_mac_system_info()
+  
+  return DeviceCapabilities(
+    model=model_id,
+    chip=chip_id,
+    memory=memory,
+    flops=CHIP_FLOPS.get(chip_id, DeviceFlops(fp32=0, fp16=0, int8=0))
+  )
 
 
-def linux_device_capabilities() -> DeviceCapabilities:
+async def linux_device_capabilities() -> DeviceCapabilities:
   import psutil
   from tinygrad import Device
 
@@ -189,6 +190,8 @@ def linux_device_capabilities() -> DeviceCapabilities:
 
     if DEBUG >= 2: print(f"NVIDIA device {gpu_name=} {gpu_memory_info=}")
 
+    pynvml.nvmlShutdown()
+
     return DeviceCapabilities(
       model=f"Linux Box ({gpu_name})",
       chip=gpu_name,
@@ -196,17 +199,96 @@ def linux_device_capabilities() -> DeviceCapabilities:
       flops=CHIP_FLOPS.get(gpu_name, DeviceFlops(fp32=0, fp16=0, int8=0)),
     )
   elif Device.DEFAULT == "AMD":
-    # TODO AMD support
+    import pyamdgpuinfo
+
+    gpu_raw_info = pyamdgpuinfo.get_gpu(0)
+    gpu_name = gpu_raw_info.name
+    gpu_memory_info = gpu_raw_info.memory_info["vram_size"]
+
+    if DEBUG >= 2: print(f"AMD device {gpu_name=} {gpu_memory_info=}")
+
     return DeviceCapabilities(
-      model="Linux Box (AMD)",
-      chip="Unknown AMD",
-      memory=psutil.virtual_memory().total // 2**20,
-      flops=DeviceFlops(fp32=0, fp16=0, int8=0),
+      model="Linux Box (" + gpu_name + ")",
+      chip=gpu_name,
+      memory=gpu_memory_info // 2**20,
+      flops=CHIP_FLOPS.get(gpu_name, DeviceFlops(fp32=0, fp16=0, int8=0)),
     )
+
   else:
     return DeviceCapabilities(
       model=f"Linux Box (Device: {Device.DEFAULT})",
       chip=f"Unknown Chip (Device: {Device.DEFAULT})",
+      memory=psutil.virtual_memory().total // 2**20,
+      flops=DeviceFlops(fp32=0, fp16=0, int8=0),
+    )
+
+
+def windows_device_capabilities() -> DeviceCapabilities:
+  import psutil
+
+  def get_gpu_info():
+    import win32com.client  # install pywin32
+
+    wmiObj = win32com.client.GetObject("winmgmts:\\\\.\\root\\cimv2")
+    gpus = wmiObj.ExecQuery("SELECT * FROM Win32_VideoController")
+
+    gpu_info = []
+    for gpu in gpus:
+      info = {
+        "Name": gpu.Name,
+        "AdapterRAM": gpu.AdapterRAM,  # Bug in this property, returns -ve for VRAM > 4GB (uint32 overflow)
+        "DriverVersion": gpu.DriverVersion,
+        "VideoProcessor": gpu.VideoProcessor
+      }
+      gpu_info.append(info)
+
+    return gpu_info
+
+  gpus_info = get_gpu_info()
+  gpu_names = [gpu['Name'] for gpu in gpus_info]
+
+  contains_nvidia = any('nvidia' in gpu_name.lower() for gpu_name in gpu_names)
+  contains_amd = any('amd' in gpu_name.lower() for gpu_name in gpu_names)
+
+  if contains_nvidia:
+    import pynvml
+
+    pynvml.nvmlInit()
+    handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+    gpu_raw_name = pynvml.nvmlDeviceGetName(handle).upper()
+    gpu_name = gpu_raw_name.rsplit(" ", 1)[0] if gpu_raw_name.endswith("GB") else gpu_raw_name
+    gpu_memory_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+
+    if DEBUG >= 2: print(f"NVIDIA device {gpu_name=} {gpu_memory_info=}")
+
+    return DeviceCapabilities(
+      model=f"Windows Box ({gpu_name})",
+      chip=gpu_name,
+      memory=gpu_memory_info.total // 2**20,
+      flops=CHIP_FLOPS.get(gpu_name, DeviceFlops(fp32=0, fp16=0, int8=0)),
+    )
+  elif contains_amd:
+    # For AMD GPUs, pyrsmi is the way (Official python package for rocm-smi)
+    from pyrsmi import rocml
+
+    rocml.smi_initialize()
+    gpu_name = rocml.smi_get_device_name(0).upper()
+    gpu_memory_info = rocml.smi_get_device_memory_total(0)
+
+    if DEBUG >= 2: print(f"AMD device {gpu_name=} {gpu_memory_info=}")
+
+    rocml.smi_shutdown()
+
+    return DeviceCapabilities(
+      model="Windows Box ({gpu_name})",
+      chip={gpu_name},
+      memory=gpu_memory_info.total // 2**20,
+      flops=DeviceFlops(fp32=0, fp16=0, int8=0),
+    )
+  else:
+    return DeviceCapabilities(
+      model=f"Windows Box (Device: Unknown)",
+      chip=f"Unknown Chip (Device(s): {gpu_names})",
       memory=psutil.virtual_memory().total // 2**20,
       flops=DeviceFlops(fp32=0, fp16=0, int8=0),
     )

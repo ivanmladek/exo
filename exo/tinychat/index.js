@@ -5,7 +5,7 @@ document.addEventListener("alpine:init", () => {
       time: null,
       messages: [],
       selectedModel: 'llama-3.2-1b',
-    },    
+    },
 
     // historical state
     histories: JSON.parse(localStorage.getItem("histories")) || [],
@@ -13,7 +13,11 @@ document.addEventListener("alpine:init", () => {
     home: 0,
     generating: false,
     endpoint: `${window.location.origin}/v1`,
+
+    // Initialize error message structure
     errorMessage: null,
+    errorExpanded: false,
+    errorTimeout: null,
 
     // performance tracking
     time_till_first: 0,
@@ -30,12 +34,90 @@ document.addEventListener("alpine:init", () => {
     // Pending message storage
     pendingMessage: null,
 
+    modelPoolInterval: null,
+
+    // Add models state alongside existing state
+    models: {},
+
+    // Show only models available locally
+    showDownloadedOnly: false,
+
+    topology: null,
+    topologyInterval: null,
+
+    // Add these new properties
+    expandedGroups: {},
+
     init() {
       // Clean up any pending messages
       localStorage.removeItem("pendingMessage");
 
+      // Get initial model list
+      this.fetchInitialModels();
+
       // Start polling for download progress
       this.startDownloadProgressPolling();
+
+      // Start model polling with the new pattern
+      this.startModelPolling();
+    },
+
+    async fetchInitialModels() {
+      try {
+        const response = await fetch(`${window.location.origin}/initial_models`);
+        if (response.ok) {
+          const initialModels = await response.json();
+          this.models = initialModels;
+        }
+      } catch (error) {
+        console.error('Error fetching initial models:', error);
+      }
+    },
+
+    async startModelPolling() {
+      while (true) {
+        try {
+          await this.populateSelector();
+          // Wait 15 seconds before next poll
+          await new Promise(resolve => setTimeout(resolve, 15000));
+        } catch (error) {
+          console.error('Model polling error:', error);
+          // If there's an error, wait before retrying
+          await new Promise(resolve => setTimeout(resolve, 15000));
+        }
+      }
+    },
+
+    async populateSelector() {
+      return new Promise((resolve, reject) => {
+        const evtSource = new EventSource(`${window.location.origin}/modelpool`);
+
+        evtSource.onmessage = (event) => {
+          if (event.data === "[DONE]") {
+            evtSource.close();
+            resolve();
+            return;
+          }
+
+          const modelData = JSON.parse(event.data);
+          // Update existing model data while preserving other properties
+          Object.entries(modelData).forEach(([modelName, data]) => {
+            if (this.models[modelName]) {
+              this.models[modelName] = {
+                ...this.models[modelName],
+                ...data,
+                loading: false
+              };
+            }
+          });
+        };
+
+        evtSource.onerror = (error) => {
+          console.error('EventSource failed:', error);
+          evtSource.close();
+          reject(error);
+        };
+      });
     },
 
     removeHistory(cstate) {
@@ -47,6 +129,12 @@ document.addEventListener("alpine:init", () => {
         localStorage.setItem("histories", JSON.stringify(this.histories));
       }
     },
+
+    clearAllHistory() {
+      this.histories = [];
+      localStorage.setItem("histories", JSON.stringify([]));
+    },
+
     // Utility functions
     formatBytes(bytes) {
       if (bytes === 0) return '0 B';
@@ -110,12 +198,8 @@ document.addEventListener("alpine:init", () => {
         localStorage.setItem("pendingMessage", value);
         this.processMessage(value);
       } catch (error) {
-        console.error('error', error)
-        this.lastErrorMessage = error.message || 'Unknown error on handleSend';
-        this.errorMessage = error.message || 'Unknown error on handleSend';
-        setTimeout(() => {
-          this.errorMessage = null;
-        }, 5 * 1000)
+        console.error('error', error);
+        this.setError(error);
         this.generating = false;
       }
     },
@@ -153,53 +237,110 @@ document.addEventListener("alpine:init", () => {
             };
           }
         });
-        const containsImage = apiMessages.some(msg => Array.isArray(msg.content) && msg.content.some(item => item.type === 'image_url'));
-        if (containsImage) {
-          // Map all messages with string content to object with type text
-          apiMessages = apiMessages.map(msg => {
-            if (typeof msg.content === 'string') {
-              return {
-                ...msg,
-                content: [
-                  {
-                    type: "text",
-                    text: msg.content
-                  }
-                ]
-              };
-            }
-            return msg;
+        
+        if (this.cstate.selectedModel === "stable-diffusion-2-1-base") {
+          // Send a request to the image generation endpoint
+          console.log(apiMessages[apiMessages.length - 1].content)
+          console.log(this.cstate.selectedModel)  
+          console.log(this.endpoint)
+          const response = await fetch(`${this.endpoint}/image/generations`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              "model": 'stable-diffusion-2-1-base',
+              "prompt": apiMessages[apiMessages.length - 1].content,
+              "image_url": this.imageUrl
+            }),
           });
-        }
-
-
-        // start receiving server sent events
-        let gottenFirstChunk = false;
-        for await (
-          const chunk of this.openaiChatCompletion(this.cstate.selectedModel, apiMessages)
-        ) {
-          if (!gottenFirstChunk) {
-            this.cstate.messages.push({ role: "assistant", content: "" });
-            gottenFirstChunk = true;
+      
+          if (!response.ok) {
+            throw new Error("Failed to fetch");
           }
-
-          // add chunk to the last message
-          this.cstate.messages[this.cstate.messages.length - 1].content += chunk;
-
-          // calculate performance tracking
-          tokens += 1;
-          this.total_tokens += 1;
-          if (start_time === 0) {
-            start_time = Date.now();
-            this.time_till_first = start_time - prefill_start;
-          } else {
-            const diff = Date.now() - start_time;
-            if (diff > 0) {
-              this.tokens_per_second = tokens / (diff / 1000);
+          const reader = response.body.getReader();
+          let done = false;
+          let gottenFirstChunk = false;
+  
+          while (!done) {
+            const { value, done: readerDone } = await reader.read();
+            done = readerDone;
+            const decoder = new TextDecoder();
+  
+            if (value) {
+              // Assume non-binary data (text) comes first
+              const chunk = decoder.decode(value, { stream: true });
+              const parsed = JSON.parse(chunk);
+              console.log(parsed)
+  
+              if (parsed.progress) {
+                if (!gottenFirstChunk) {
+                  this.cstate.messages.push({ role: "assistant", content: "" });
+                  gottenFirstChunk = true;
+                }
+                this.cstate.messages[this.cstate.messages.length - 1].content = parsed.progress;
+              }
+              else if (parsed.images) {
+                if (!gottenFirstChunk) {
+                  this.cstate.messages.push({ role: "assistant", content: "" });
+                  gottenFirstChunk = true;
+                }
+                const imageUrl = parsed.images[0].url;
+                console.log(imageUrl)
+                this.cstate.messages[this.cstate.messages.length - 1].content = `![Generated Image](${imageUrl}?t=${Date.now()})`;
+              }
             }
           }
         }
+        
+        else{        
+          const containsImage = apiMessages.some(msg => Array.isArray(msg.content) && msg.content.some(item => item.type === 'image_url'));
+          if (containsImage) {
+            // Map all messages with string content to object with type text
+            apiMessages = apiMessages.map(msg => {
+              if (typeof msg.content === 'string') {
+                return {
+                  ...msg,
+                  content: [
+                    {
+                      type: "text",
+                      text: msg.content
+                    }
+                  ]
+                };
+              }
+              return msg;
+            });
+          }
 
+          console.log(apiMessages)
+          //start receiving server sent events
+          let gottenFirstChunk = false;
+          for await (
+            const chunk of this.openaiChatCompletion(this.cstate.selectedModel, apiMessages)
+          ) {
+            if (!gottenFirstChunk) {
+              this.cstate.messages.push({ role: "assistant", content: "" });
+              gottenFirstChunk = true;
+            }
+
+            // add chunk to the last message
+            this.cstate.messages[this.cstate.messages.length - 1].content += chunk;
+
+            // calculate performance tracking
+            tokens += 1;
+            this.total_tokens += 1;
+            if (start_time === 0) {
+              start_time = Date.now();
+              this.time_till_first = start_time - prefill_start;
+            } else {
+              const diff = Date.now() - start_time;
+              if (diff > 0) {
+                this.tokens_per_second = tokens / (diff / 1000);
+              }
+            }
+          }
+        }
         // Clean the cstate before adding it to histories
         const cleanedCstate = JSON.parse(JSON.stringify(this.cstate));
         cleanedCstate.messages = cleanedCstate.messages.map(msg => {
@@ -232,12 +373,8 @@ document.addEventListener("alpine:init", () => {
           console.error("Failed to save histories to localStorage:", error);
         }
       } catch (error) {
-        console.error('error', error)
-        this.lastErrorMessage = error;
-        this.errorMessage = error;
-        setTimeout(() => {
-          this.errorMessage = null;
-        }, 5 * 1000)
+        console.error('error', error);
+        this.setError(error);
       } finally {
         this.generating = false;
       }
@@ -262,8 +399,6 @@ document.addEventListener("alpine:init", () => {
     },
 
     async *openaiChatCompletion(model, messages) {
-      // stream response
-      console.log("model", model)
       const response = await fetch(`${this.endpoint}/chat/completions`, {
         method: "POST",
         headers: {
@@ -286,19 +421,17 @@ document.addEventListener("alpine:init", () => {
 
       const reader = response.body.pipeThrough(new TextDecoderStream())
         .pipeThrough(new EventSourceParserStream()).getReader();
+      
       while (true) {
         const { done, value } = await reader.read();
-        if (done) {
-          break;
-        }
+        if (done) break;
+        
         if (value.type === "event") {
           const json = JSON.parse(value.data);
           if (json.choices) {
             const choice = json.choices[0];
-            if (choice.finish_reason === "stop") {
-              break;
-            }
-            yield choice.delta.content;
+            if (choice.finish_reason === "stop") break;
+            if (choice.delta.content) yield choice.delta.content;
           }
         }
       }
@@ -372,6 +505,226 @@ document.addEventListener("alpine:init", () => {
       this.downloadProgressInterval = setInterval(() => {
         this.fetchDownloadProgress();
       }, 1000); // Poll every second
+    },
+
+    // Add a helper method to set errors consistently
+    setError(error) {
+      this.errorMessage = {
+        basic: error.message || "An unknown error occurred",
+        stack: error.stack || ""
+      };
+      this.errorExpanded = false;
+
+      if (this.errorTimeout) {
+        clearTimeout(this.errorTimeout);
+      }
+
+      if (!this.errorExpanded) {
+        this.errorTimeout = setTimeout(() => {
+          this.errorMessage = null;
+          this.errorExpanded = false;
+        }, 30 * 1000);
+      }
+    },
+
+    async deleteModel(modelName, model) {
+      const downloadedSize = model.total_downloaded || 0;
+      const sizeMessage = downloadedSize > 0 ?
+        `This will free up ${this.formatBytes(downloadedSize)} of space.` :
+        'This will remove any partially downloaded files.';
+
+      if (!confirm(`Are you sure you want to delete ${model.name}? ${sizeMessage}`)) {
+        return;
+      }
+
+      try {
+        const response = await fetch(`${window.location.origin}/models/${modelName}`, {
+          method: 'DELETE',
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.detail || 'Failed to delete model');
+        }
+
+        // Update the model status in the UI
+        if (this.models[modelName]) {
+          this.models[modelName].downloaded = false;
+          this.models[modelName].download_percentage = 0;
+          this.models[modelName].total_downloaded = 0;
+        }
+
+        // If this was the selected model, switch to a different one
+        if (this.cstate.selectedModel === modelName) {
+          const availableModel = Object.keys(this.models).find(key => this.models[key].downloaded);
+          this.cstate.selectedModel = availableModel || 'llama-3.2-1b';
+        }
+
+        // Show success message
+        console.log(`Model deleted successfully from: ${data.path}`);
+
+        // Refresh the model list
+        await this.populateSelector();
+      } catch (error) {
+        console.error('Error deleting model:', error);
+        this.setError(error.message || 'Failed to delete model');
+      }
+    },
+
+    async handleDownload(modelName) {
+      try {
+        const response = await fetch(`${window.location.origin}/download`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            model: modelName
+          })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || 'Failed to start download');
+        }
+
+        // Update the model's status immediately when download starts
+        if (this.models[modelName]) {
+          this.models[modelName] = {
+            ...this.models[modelName],
+            loading: true
+          };
+        }
+
+      } catch (error) {
+        console.error('Error starting download:', error);
+        this.setError(error);
+      }
+    },
+
+    async fetchTopology() {
+      try {
+        const response = await fetch(`${this.endpoint}/topology`);
+        if (!response.ok) throw new Error('Failed to fetch topology');
+        return await response.json();
+      } catch (error) {
+        console.error('Topology fetch error:', error);
+        return null;
+      }
+    },
+
+    initTopology() {
+      // Initial fetch
+      this.updateTopology();
+
+      // Set up periodic updates
+      this.topologyInterval = setInterval(() => this.updateTopology(), 5000);
+
+      // Cleanup on page unload
+      window.addEventListener('beforeunload', () => {
+        if (this.topologyInterval) {
+          clearInterval(this.topologyInterval);
+        }
+      });
+    },
+
+    async updateTopology() {
+      const topologyData = await this.fetchTopology();
+      if (!topologyData) return;
+
+      const vizElement = this.$refs.topologyViz;
+      vizElement.innerHTML = ''; // Clear existing visualization
+
+      // Helper function to truncate node ID
+      const truncateNodeId = (id) => id.substring(0, 8);
+
+      // Create nodes from object
+      Object.entries(topologyData.nodes).forEach(([nodeId, node]) => {
+        const nodeElement = document.createElement('div');
+        nodeElement.className = 'topology-node';
+
+        // Get peer connections for this node
+        const peerConnections = topologyData.peer_graph[nodeId] || [];
+        const peerConnectionsHtml = peerConnections.map(peer => `
+          <div class="peer-connection">
+            <i class="fas fa-arrow-right"></i>
+            <span>To ${truncateNodeId(peer.to_id)}: ${peer.description}</span>
+          </div>
+        `).join('');
+
+        nodeElement.innerHTML = `
+          <div class="node-info">
+            <span class="status ${nodeId === topologyData.active_node_id ? 'active' : 'inactive'}"></span>
+            <span>${node.model} [${truncateNodeId(nodeId)}]</span>
+          </div>
+          <div class="node-details">
+            <span>${node.chip}</span>
+            <span>${(node.memory / 1024).toFixed(1)}GB RAM</span>
+            <span>${node.flops.fp32.toFixed(1)} TF</span>
+          </div>
+          <div class="peer-connections">
+            ${peerConnectionsHtml}
+          </div>
+        `;
+        vizElement.appendChild(nodeElement);
+      });
+    },
+
+    // Add these helper methods
+    countDownloadedModels(models) {
+      return Object.values(models).filter(model => model.downloaded).length;
+    },
+
+    getGroupCounts(groupModels) {
+      const total = Object.keys(groupModels).length;
+      const downloaded = this.countDownloadedModels(groupModels);
+      return `[${downloaded}/${total}]`;
+    },
+
+    // Update the existing groupModelsByPrefix method to include counts
+    groupModelsByPrefix(models) {
+      const groups = {};
+      const filteredModels = this.showDownloadedOnly ?
+        Object.fromEntries(Object.entries(models).filter(([, model]) => model.downloaded)) :
+        models;
+
+      Object.entries(filteredModels).forEach(([key, model]) => {
+        const parts = key.split('-');
+        const mainPrefix = parts[0].toUpperCase();
+        
+        let subPrefix;
+        if (parts.length === 2) {
+          subPrefix = parts[1].toUpperCase();
+        } else if (parts.length > 2) {
+          subPrefix = parts[1].toUpperCase();
+        } else {
+          subPrefix = 'OTHER';
+        }
+        
+        if (!groups[mainPrefix]) {
+          groups[mainPrefix] = {};
+        }
+        if (!groups[mainPrefix][subPrefix]) {
+          groups[mainPrefix][subPrefix] = {};
+        }
+        groups[mainPrefix][subPrefix][key] = model;
+      });
+      return groups;
+    },
+
+    toggleGroup(prefix, subPrefix = null) {
+      const key = subPrefix ? `${prefix}-${subPrefix}` : prefix;
+      this.expandedGroups[key] = !this.expandedGroups[key];
+    },
+
+    isGroupExpanded(prefix, subPrefix = null) {
+      const key = subPrefix ? `${prefix}-${subPrefix}` : prefix;
+      return this.expandedGroups[key] || false;
     },
   }));
 });
@@ -529,6 +882,7 @@ function createParser(onParse) {
     }
   }
 }
+
 const BOM = [239, 187, 191];
 function hasBom(buffer) {
   return BOM.every((charCode, index) => buffer.charCodeAt(index) === charCode);

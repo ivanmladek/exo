@@ -18,14 +18,17 @@ exo: Run your own AI cluster at home with everyday devices. Maintained by [exo l
 [![Tests](https://dl.circleci.com/status-badge/img/circleci/TrkofJDoGzdQAeL6yVHKsg/4i5hJuafuwZYZQxbRAWS71/tree/main.svg?style=svg)](https://dl.circleci.com/status-badge/redirect/circleci/TrkofJDoGzdQAeL6yVHKsg/4i5hJuafuwZYZQxbRAWS71/tree/main)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
+<a href="https://trendshift.io/repositories/11849" target="_blank"><img src="https://trendshift.io/api/badge/repositories/11849" alt="exo-explore%2Fexo | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
+
 </div>
 
 ---
 
-Forget expensive NVIDIA GPUs, unify your existing devices into one powerful GPU: iPhone, iPad, Android, Mac, Linux, pretty much any device!
+Unify your existing devices into one powerful GPU: iPhone, iPad, Android, Mac, NVIDIA, Raspberry Pi, pretty much any device!
 
 <div align="center">
   <h2>Update: exo is hiring. See <a href="https://exolabs.net">here</a> for more details.</h2>
+  <h2>Interested in running exo in your business? <a href="mailto:hello@exolabs.net">Contact us</a> to discuss.</h2>
 </div>
 
 ## Get Involved
@@ -38,7 +41,7 @@ We also welcome contributions from the community. We have a list of bounties in 
 
 ### Wide Model Support
 
-exo supports different models including LLaMA ([MLX](exo/inference/mlx/models/llama.py) and [tinygrad](exo/inference/tinygrad/models/llama.py)), Mistral, LlaVA, Qwen and Deepseek.
+exo supports different models including LLaMA ([MLX](exo/inference/mlx/models/llama.py) and [tinygrad](exo/inference/tinygrad/models/llama.py)), Mistral, LlaVA, Qwen, and Deepseek.
 
 ### Dynamic Model Partitioning
 
@@ -46,7 +49,7 @@ exo [optimally splits up models](exo/topology/ring_memory_weighted_partitioning_
 
 ### Automatic Device Discovery
 
-exo will [automatically discover](https://github.com/exo-explore/exo/blob/945f90f676182a751d2ad7bcf20987ab7fe0181e/exo/orchestration/standard_node.py#L154) other devices using the best method available. Zero manual configuration.
+exo will [automatically discover](https://github.com/exo-explore/exo/blob/945f90f676182a751d2ad7bcf20987ab7fe0181e/exo/orchestration/node.py#L154) other devices using the best method available. Zero manual configuration.
 
 ### ChatGPT-compatible API
 
@@ -54,11 +57,11 @@ exo provides a [ChatGPT-compatible API](exo/api/chatgpt_api.py) for running mode
 
 ### Device Equality
 
-Unlike other distributed inference frameworks, exo does not use a master-worker architecture. Instead, exo devices [connect p2p](https://github.com/exo-explore/exo/blob/945f90f676182a751d2ad7bcf20987ab7fe0181e/exo/orchestration/standard_node.py#L161). As long as a device is connected somewhere in the network, it can be used to run models.
+Unlike other distributed inference frameworks, exo does not use a master-worker architecture. Instead, exo devices [connect p2p](https://github.com/exo-explore/exo/blob/945f90f676182a751d2ad7bcf20987ab7fe0181e/exo/orchestration/node.py#L161). As long as a device is connected somewhere in the network, it can be used to run models.
 
 Exo supports different [partitioning strategies](exo/topology/partitioning_strategy.py) to split up a model across devices. The default partitioning strategy is [ring memory weighted partitioning](exo/topology/ring_memory_weighted_partitioning_strategy.py). This runs an inference in a ring where each device runs a number of model layers proportional to the memory of the device.
 
-!["A screenshot of exo running 5 nodes](docs/exo-screenshot.png)
+!["A screenshot of exo running 5 nodes](docs/exo-screenshot.jpg)
 
 ## Installation
 
@@ -67,10 +70,10 @@ The current recommended way to install exo is from source.
 ### Prerequisites
 
 - Python>=3.12.0 is required because of [issues with asyncio](https://github.com/exo-explore/exo/issues/5) in previous versions.
-- Linux (with NVIDIA card):
-  - NVIDIA driver (test with `nvidia-smi`)
-  - CUDA (https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html#cuda-cross-platform-installation) (test with `nvcc --version`)
-  - cuDNN (https://developer.nvidia.com/cudnn-downloads) (test with [link](https://docs.nvidia.com/deeplearning/cudnn/latest/installation/linux.html#verifying-the-install-on-linux:~:text=at%20a%20time.-,Verifying%20the%20Install%20on%20Linux,Test%20passed!,-Upgrading%20From%20Older))
+- For Linux with NVIDIA GPU support (Linux-only, skip if not using Linux or NVIDIA):
+  - NVIDIA driver - verify with `nvidia-smi`
+  - CUDA toolkit - install from [NVIDIA CUDA guide](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html#cuda-cross-platform-installation), verify with `nvcc --version`
+  - cuDNN library - download from [NVIDIA cuDNN page](https://developer.nvidia.com/cudnn-downloads), verify installation by following [these steps](https://docs.nvidia.com/deeplearning/cudnn/latest/installation/linux.html#verifying-the-install-on-linux:~:text=at%20a%20time.-,Verifying%20the%20Install%20on%20Linux,Test%20passed!,-Upgrading%20From%20Older)
 
 ### Hardware Requirements
 
@@ -100,13 +103,13 @@ source install.sh
 
 - There are a number of things users have empirically found to improve performance on Apple Silicon Macs:
 
-1. Upgrade to the latest version of MacOS 15.
+1. Upgrade to the latest version of macOS Sequoia.
 2. Run `./configure_mlx.sh`. This runs commands to optimize GPU memory allocation on Apple Silicon Macs.
 
 
 ## Documentation
 
-### Example Usage on Multiple MacOS Devices
+### Example Usage on Multiple macOS Devices
 
 #### Device 1:
 
@@ -121,14 +124,14 @@ exo
 
 That's it! No configuration required - exo will automatically discover the other device(s).
 
-exo starts a ChatGPT-like WebUI (powered by [tinygrad tinychat](https://github.com/tinygrad/tinygrad/tree/master/examples/tinychat)) on http://localhost:8000
+exo starts a ChatGPT-like WebUI (powered by [tinygrad tinychat](https://github.com/tinygrad/tinygrad/tree/master/examples/tinychat)) on http://localhost:52415
 
-For developers, exo also starts a ChatGPT-compatible API endpoint on http://localhost:8000/v1/chat/completions. Examples with curl:
+For developers, exo also starts a ChatGPT-compatible API endpoint on http://localhost:52415/v1/chat/completions. Examples with curl:
 
 #### Llama 3.2 3B:
 
 ```sh
-curl http://localhost:8000/v1/chat/completions \
+curl http://localhost:52415/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
      "model": "llama-3.2-3b",
@@ -140,7 +143,7 @@ curl http://localhost:8000/v1/chat/completions \
 #### Llama 3.1 405B:
 
 ```sh
-curl http://localhost:8000/v1/chat/completions \
+curl http://localhost:52415/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
      "model": "llama-3.1-405b",
@@ -149,10 +152,22 @@ curl http://localhost:8000/v1/chat/completions \
    }'
 ```
 
+#### DeepSeek R1 (full 671B):
+
+```sh
+curl http://localhost:52415/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+     "model": "deepseek-r1",
+     "messages": [{"role": "user", "content": "What is the meaning of exo?"}],
+     "temperature": 0.7
+   }'
+```
+
 #### Llava 1.5 7B (Vision Language Model):
 
 ```sh
-curl http://localhost:8000/v1/chat/completions \
+curl http://localhost:52415/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
      "model": "llava-1.5-7b-hf",
@@ -177,15 +192,15 @@ curl http://localhost:8000/v1/chat/completions \
    }'
 ```
 
-### Example Usage on Multiple Heterogenous Devices (MacOS + Linux)
+### Example Usage on Multiple Heterogenous Devices (macOS + Linux)
 
-#### Device 1 (MacOS):
+#### Device 1 (macOS):
 
 ```sh
-exo --inference-engine tinygrad
+exo
 ```
 
-Here we explicitly tell exo to use the **tinygrad** inference engine.
+Note: We don't need to explicitly tell exo to use the **tinygrad** inference engine. **MLX** and **tinygrad** are interoperable!
 
 #### Device 2 (Linux):
 ```sh
@@ -206,6 +221,22 @@ With a custom prompt:
 
 ```sh
 exo run llama-3.2-3b --prompt "What is the meaning of exo?"
+```
+
+### Model Storage
+
+Models by default are stored in `~/.cache/exo/downloads`.
+
+You can set a different model storage location by setting the `EXO_HOME` env var.
+
+## Model Downloading
+
+Models are downloaded from Hugging Face. If you are running exo in a country with strict internet censorship, you may need to download the models manually and put them in the `~/.cache/exo/downloads` directory.
+
+To download models from a proxy endpoint, set the `HF_ENDPOINT` environment variable. For example, to run exo with the huggingface mirror endpoint:
+
+```sh
+HF_ENDPOINT=https://hf-mirror.com exo
 ```
 
 ## Debugging
@@ -238,7 +269,7 @@ python3 format.py ./exo
 
 ## Known Issues
 
-- On some versions of MacOS/Python, certificates are not installed properly which can lead to SSL errors (e.g. SSL error with huggingface.co). To fix this, run the Install Certificates command, usually:
+- On certain versions of Python on macOS, certificates may not installed correctly, potentially causing SSL errors (e.g., when accessing huggingface.co). To resolve this, run the `Install Certificates` command, typicall as follows:
 
 ```sh
 /Applications/Python 3.x/Install Certificates.command
@@ -255,8 +286,15 @@ exo supports the following inference engines:
 - 🚧 [PyTorch](https://github.com/exo-explore/exo/pull/139)
 - 🚧 [llama.cpp](https://github.com/exo-explore/exo/issues/167)
 
-## Networking Modules
+## Discovery Modules
+
+- ✅ [UDP](exo/networking/udp)
+- ✅ [Manual](exo/networking/manual)
+- ✅ [Tailscale](exo/networking/tailscale)
+- 🚧 Radio
+- 🚧 Bluetooth
+
+# Peer Networking Modules
 
 - ✅ [GRPC](exo/networking/grpc)
-- 🚧 [Radio](TODO)
-- 🚧 [Bluetooth](TODO)
+- 🚧 NCCL

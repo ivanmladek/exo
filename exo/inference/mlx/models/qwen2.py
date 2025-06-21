@@ -9,13 +9,12 @@ from mlx_lm.models.qwen2 import TransformerBlock, ModelArgs
 from ...shard import Shard
 from .base import IdentityBlock
 
-
 @dataclass
 class ModelArgs(ModelArgs):
   shard: Shard = field(default_factory=lambda: Shard("", 0, 0, 0))
 
   def __post_init__(self):
-    super().__post_init__()  # Ensure parent initializations are respected
+    super().__post_init__()
 
     if isinstance(self.shard, Shard):
       return
@@ -24,7 +23,6 @@ class ModelArgs(ModelArgs):
 
     self.shard = Shard(**self.shard)
 
-
 class Qwen2Model(nn.Module):
   def __init__(self, args: ModelArgs):
     super().__init__()
@@ -32,14 +30,17 @@ class Qwen2Model(nn.Module):
     self.vocab_size = args.vocab_size
     self.num_hidden_layers = args.num_hidden_layers
     assert self.vocab_size > 0
-    if self.args.shard.is_first_layer():
+
+    if self.args.shard.is_first_layer() or (self.args.shard.is_last_layer() and args.tie_word_embeddings):
       self.embed_tokens = nn.Embedding(args.vocab_size, args.hidden_size)
+
     self.layers = []
     for i in range(self.num_hidden_layers):
       if self.args.shard.start_layer <= i <= self.args.shard.end_layer:
         self.layers.append(TransformerBlock(args=args))
       else:
         self.layers.append(IdentityBlock())
+
     if self.args.shard.is_last_layer():
       self.norm = nn.RMSNorm(args.hidden_size, eps=args.rms_norm_eps)
 
